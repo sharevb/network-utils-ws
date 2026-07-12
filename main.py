@@ -1,7 +1,8 @@
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Request
 from pydantic import BaseModel
 import ssl
 import socket
+import base64
 from datetime import datetime
 from typing import Optional, Dict, Any
 import httpx
@@ -15,11 +16,60 @@ import dns.exception
 import whois
 from fastapi import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.responses import JSONResponse
 import os
 
 app = FastAPI(title="Network Utilities Service")
 
 request_timeout = int(os.getenv("REQUEST_TIMEOUT", "25"))
+
+
+def _get_basic_auth_credentials() -> Optional[tuple[str, str]]:
+    basic_auth = os.getenv("BASIC_AUTH", "").strip()
+    if not basic_auth:
+        return None
+    if ":" not in basic_auth:
+        raise ValueError("BASIC_AUTH must be in the format username:password")
+    username, password = basic_auth.split(":", 1)
+    return username, password
+
+
+EXPECTED_BASIC_AUTH = _get_basic_auth_credentials()
+
+
+@app.middleware("http")
+async def require_basic_auth(request: Request, call_next):
+    if not EXPECTED_BASIC_AUTH:
+        return await call_next(request)
+
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Basic "):
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Unauthorized"},
+            headers={"WWW-Authenticate": 'Basic realm="Restricted"'},
+        )
+
+    try:
+        encoded_credentials = auth_header.split(" ", 1)[1]
+        decoded_credentials = base64.b64decode(encoded_credentials.encode("utf-8")).decode("utf-8")
+        username, password = decoded_credentials.split(":", 1)
+    except Exception:
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Unauthorized"},
+            headers={"WWW-Authenticate": 'Basic realm="Restricted"'},
+        )
+
+    expected_username, expected_password = EXPECTED_BASIC_AUTH
+    if (username, password) != (expected_username, expected_password):
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Unauthorized"},
+            headers={"WWW-Authenticate": 'Basic realm="Restricted"'},
+        )
+
+    return await call_next(request)
 
 if not os.getenv("DISABLE_CORS"):
     app.add_middleware(

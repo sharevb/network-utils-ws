@@ -33,6 +33,11 @@ CORS "*" is enabled by default. You can disable it by setting `DISABLE_CORS=true
 
 DNS/HTTP Query timeout can be controlled by setting `REQUEST_TIMEOUT=XXX` environment variable.
 
+## Basic authentication
+
+You can protect the API with HTTP Basic Auth by setting `BASIC_AUTH=username:password`.
+If this variable is unset, the service will run without authentication.
+
 ## **Running in Docker**
 
 Pull latest image:
