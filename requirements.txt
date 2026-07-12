@@ -4,3 +4,4 @@ httpx
 dnspython
 python-whois
 cryptography
+icmplib

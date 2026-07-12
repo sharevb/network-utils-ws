@@ -6,6 +6,7 @@ import base64
 from datetime import datetime
 from typing import Optional, Dict, Any
 import httpx
+from icmplib import ping as icmp_ping
 from urllib.parse import urlparse
 import dns.resolver
 import dns.dnssec
@@ -299,6 +300,45 @@ def api_check_redirect(
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/ping")
+def ping(
+    target: str = Query(..., description="IP address or hostname to ping"),
+    count: int = Query(1, ge=1, le=10, description="Number of ICMP echo requests"),
+    timeout: int = Query(2, ge=1, le=10, description="Per-packet timeout in seconds"),
+):
+    try:
+        resolved_ip = target
+        try:
+            resolved_ip = socket.gethostbyname(target)
+        except socket.gaierror as exc:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "ok": False,
+                    "target": target,
+                    "reachable": False,
+                    "error": str(exc),
+                },
+            )
+
+        result = icmp_ping(resolved_ip, count=count, timeout=timeout, privileged=False)
+        return {
+            "ok": True,
+            "target": target,
+            "ip": resolved_ip,
+            "reachable": result.is_alive,
+            "avg_rtt_ms": round(result.avg_rtt, 2) if result.avg_rtt is not None else None,
+            "packet_loss": result.packet_loss,
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "target": target,
+            "reachable": False,
+            "error": str(exc),
+        }
 
 # ---------- Models ----------
 

@@ -22,7 +22,8 @@ The service exposes clean JSON APIs suitable for automation, monitoring, and sec
 - **WHOIS raw + parsed output**  
 - **DNSSEC RRSET validation**  
 - **Reverse DNS (PTR)**  
-- **SOA + AXFR zone transfer test**  
+- **SOA + AXFR zone transfer test**
+- **Ping queries**  
 - **Built‑in `/health` endpoint** for container orchestration  
 
 ## CORS enabled by default
@@ -53,6 +54,23 @@ docker run \
   -p 8000:8000 \
   sharevb/network-utils-ws:latest
 ```
+
+## Ping endpoint
+
+You can ping a target IP address or hostname by calling:
+
+```bash
+curl "http://localhost:8000/ping?target=8.8.8.8&count=3&timeout=2"
+```
+
+You can also use a DNS name such as:
+
+```bash
+curl "http://localhost:8000/ping?target=example.com&count=3&timeout=2"
+```
+
+The optional `count` and `timeout` query parameters control the number of probes and the per-packet timeout in seconds.
+It returns a JSON response indicating whether the host responded and the ping statistics.
 
 ## 🧰 Development
 
