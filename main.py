@@ -24,6 +24,9 @@ app = FastAPI(title="Network Utilities Service")
 
 request_timeout = int(os.getenv("REQUEST_TIMEOUT", "25"))
 
+@app.get("/health")
+def health():
+    return {"status": "ok"}
 
 def _get_basic_auth_credentials() -> Optional[tuple[str, str]]:
     basic_auth = os.getenv("BASIC_AUTH", "").strip()
@@ -40,6 +43,9 @@ EXPECTED_BASIC_AUTH = _get_basic_auth_credentials()
 
 @app.middleware("http")
 async def require_basic_auth(request: Request, call_next):
+    if request.url.path in {"/health", "/health/"}:
+        return await call_next(request)
+
     if not EXPECTED_BASIC_AUTH:
         return await call_next(request)
 
@@ -296,10 +302,6 @@ def api_check_redirect(
     Check if HTTP -> HTTPS redirect is working correctly.
     """
     return check_http_to_https_redirect(domain)
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
 
 
 @app.get("/ping")
