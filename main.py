@@ -1,10 +1,12 @@
+from time import perf_counter
+
 from fastapi import FastAPI, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, HttpUrl
 import ssl
 import socket
 import base64
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import List, Optional, Dict, Any
 import httpx
 from icmplib import ping as icmp_ping
 from urllib.parse import urlparse
@@ -620,6 +622,119 @@ def api_reverse_dns(ip: str = Query(...), resolver_ip: Optional[str] = None):
 @app.get("/soa-axfr", response_model=AXFRResult)
 def api_soa_axfr(domain: str = Query(...), resolver_ip: Optional[str] = None):
     return soa_axfr_test(domain, resolver_ip)
+
+class Hop(BaseModel):
+    index: int
+    url: str
+    status_code: int
+    duration_ms: float
+    headers: dict
+    is_redirect: bool
+    location: Optional[str]
+    body_preview: Optional[str]
+    body_truncated: bool
+
+class RedirectChain(BaseModel):
+    input_url: str
+    final_url: str
+    hop_count: int
+    chain: List[Hop]
+    warnings: List[str]
+
+def protocol(url: str) -> str:
+    return url.split("://", 1)[0].lower()
+
+@app.get("/redirect-chain", response_model=RedirectChain)
+async def redirect_chain(
+    url: HttpUrl,
+    method: str = Query("GET", regex="^(GET|HEAD)$"),
+    user_agent: str = Query("Mozilla/5.0 (Copilot Redirect Checker)"),
+    preview_bytes: int = Query(512, ge=0, description="Number of bytes to preview from the response body"),
+    include_body: bool = Query(False),
+    max_hops: int = Query(10, ge=1, le=50, description="Maximum number of redirect hops to follow")
+):
+    chain: List[Hop] = []
+    visited = set()
+    current_url = str(url)
+    warnings = []
+
+    async with httpx.AsyncClient(follow_redirects=False, headers={"User-Agent": user_agent}) as client:
+        for i in range(max_hops):
+            if current_url in visited:
+                warnings.append("Redirect loop detected")
+                break
+
+            visited.add(current_url)
+
+            start = perf_counter()
+            response = await client.request(method, current_url)
+            duration_ms = (perf_counter() - start) * 1000
+
+            is_redirect = response.status_code in (301, 302, 303, 307, 308)
+            location = response.headers.get("Location")
+
+            # --- BODY PREVIEW LOGIC ---
+            body_preview = None
+            body_truncated = False
+
+            if include_body and method == "GET":
+                raw = response.content
+                if raw:
+                    if len(raw) > preview_bytes:
+                        body_preview = raw[:preview_bytes].decode("utf-8", errors="replace")
+                        body_truncated = True
+                    else:
+                        body_preview = raw.decode("utf-8", errors="replace")
+                        body_truncated = False
+
+            chain.append(
+                Hop(
+                    index=i,
+                    url=str(current_url),
+                    status_code=response.status_code,
+                    duration_ms=duration_ms,
+                    headers=dict(response.headers),
+                    is_redirect=is_redirect,
+                    location=location,
+                    body_preview=body_preview,
+                    body_truncated=body_truncated,
+                )
+            )
+
+            if not is_redirect or not location:
+                break
+
+            current_url = httpx.URL(current_url).join(location)
+
+            # --- PROTOCOL CHANGE WARNING ---
+            if chain:
+                prev_proto = protocol(chain[-1].url)
+                curr_proto = protocol(str(current_url))
+                if prev_proto != curr_proto:
+                    warnings.append(f"Protocol changed: {chain[-1].url} → {current_url}")
+
+        else:
+            warnings.append("Max redirect hops reached")
+
+    # Final URL
+    final_url = current_url
+
+    # Extra warnings
+    if len(chain) > 5:
+        warnings.append("Long redirect chain (>5 hops)")
+    if chain and chain[0].url.startswith("http://") and str(final_url).startswith("https://"):
+        warnings.append("Protocol changed from HTTP → HTTPS")
+    if chain and chain[-1].status_code != 200:
+        warnings.append(f"Final status is not 200 ({chain[-1].status_code})")
+
+    return RedirectChain(
+        input_url=str(url),
+        final_url=str(final_url),
+        hop_count=len(chain),
+        chain=chain,
+        warnings=warnings,
+    )
+
 
 import uvicorn
 if __name__ == "__main__":
